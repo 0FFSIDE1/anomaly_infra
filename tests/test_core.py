@@ -12,7 +12,7 @@ from anomaly_infra.constants import (
 from anomaly_infra.service import AnomalyDetectionService
 from anomaly_infra.types import RuleProfile
 
-from conftest import DummyFlags
+from tests.conftest import DummyFlags
 
 
 class Store:
