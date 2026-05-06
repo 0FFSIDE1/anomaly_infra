@@ -20,11 +20,23 @@ CACHES = {
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+ANOMALY_EVENT_TEST_DB = os.getenv("ANOMALY_EVENT_TEST_DB", "/tmp/anomaly_infra_event_test.sqlite3")
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": ":memory:",
-    }
+    },
+    "anomaly_primary": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": ANOMALY_EVENT_TEST_DB,
+        "TEST": {"DEPENDENCIES": []},
+    },
+    "anomaly_events": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": ANOMALY_EVENT_TEST_DB,
+        "TEST": {"MIRROR": "anomaly_primary"},
+    },
 }
 
 MIDDLEWARE = [
