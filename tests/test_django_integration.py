@@ -12,7 +12,7 @@ from anomaly_infra.django.request import build_event_payload, get_ip
 from anomaly_infra.service import AnomalyDetectionService
 from anomaly_infra.types import AnomalyDecision
 
-from conftest import DummyFlags
+from tests.conftest import DummyFlags
 
 
 @pytest.mark.django_db
