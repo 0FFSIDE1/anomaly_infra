@@ -1,0 +1,5 @@
+feature_flag_infra
+pytest-django
+celery
+redis
+django
