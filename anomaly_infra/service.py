@@ -18,9 +18,15 @@ from .defaults import DEFAULT_RULE_PROFILE
 from .interfaces import AlertDispatcher, AnomalyEventStore
 from .sanitizer import mask_sensitive
 from .types import AnomalyDecision
-from feature_flag_infra.django.providers import DjangoDBFlagProvider
 
 logger = logging.getLogger(__name__)
+
+
+class FeatureFlagClient(Protocol):
+    """Subset of feature-flag-infra's public service API used by this package."""
+
+    def enabled(self, flag: str, *, user: Any = None, default: bool = False) -> bool:
+        ...
 
 
 class StaticFeatureFlags:
@@ -29,8 +35,12 @@ class StaticFeatureFlags:
     def __init__(self, flags: dict[str, bool] | None = None):
         self.flags = flags or {}
 
-    def is_enabled(self, flag: str, *, user: Any = None, default: bool = False) -> bool:
+    def enabled(self, flag: str, *, user: Any = None, default: bool = False) -> bool:
         return bool(self.flags.get(flag, default))
+
+    def is_enabled(self, flag: str, *, user: Any = None, default: bool = False) -> bool:
+        """Backward-compatible alias for provider-style flag clients."""
+        return self.enabled(flag, user=user, default=default)
 
 
 class AnomalyDetectionService:
@@ -39,7 +49,7 @@ class AnomalyDetectionService:
     def __init__(
         self,
         *,
-        flags: DjangoDBFlagProvider | None = None,
+        flags: FeatureFlagClient | None = None,
         event_store: AnomalyEventStore | None = None,
         alert_dispatcher: AlertDispatcher | None = None,
         config: AnomalyConfig | None = None,
@@ -54,6 +64,8 @@ class AnomalyDetectionService:
 
     def flag_enabled(self, flag_name: str, *, user: Any = None, default: bool = False) -> bool:
         try:
+            if hasattr(self.flags, "enabled"):
+                return bool(self.flags.enabled(flag_name, user=user, default=default))
             return bool(self.flags.is_enabled(flag_name, user=user, default=default))
         except Exception:
             logger.exception("anomaly_feature_flag_check_failed", extra={"flag": flag_name})

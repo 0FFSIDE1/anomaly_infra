@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Django service factory for anomaly-infra.
 
 This module intentionally avoids importing models/providers at import time so it
@@ -24,7 +26,6 @@ def get_anomaly_service() -> AnomalyDetectionService:
         from feature_flag_infra.django.service import get_feature_flags
         from anomaly_infra.service import AnomalyDetectionService
         from .providers import DjangoAnomalyEventStore, LoggingAlertDispatcher
-        
 
         config = AnomalyConfig(rule_profiles=getattr(settings, "ANOMALY_RULE_PROFILES", {}))
         _anomaly_service = AnomalyDetectionService(

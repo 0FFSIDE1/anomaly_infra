@@ -76,6 +76,20 @@ def test_alerting_requires_alert_feature_flag():
     assert AnomalyDetectionService(config=cfg, flags=DummyFlags({ANOMALY_ALERTING_ENABLED: True})).evaluate("x").should_alert
 
 
+def test_feature_flag_service_public_enabled_api_is_supported():
+    from feature_flag_infra.interfaces import FeatureFlagProvider
+    from feature_flag_infra.service import FeatureFlagService
+
+    class Provider(FeatureFlagProvider):
+        def is_enabled(self, flag, *, user=None, default=False):
+            return {ANOMALY_ALERTING_ENABLED: True}.get(flag, default)
+
+    cfg = AnomalyConfig({"x": {"risk_score": 70, "severity": SEVERITY_HIGH, "category": CATEGORY_REQUEST}})
+    svc = AnomalyDetectionService(config=cfg, flags=FeatureFlagService(Provider()))
+
+    assert svc.evaluate("x").should_alert
+
+
 def test_blocking_requires_blocking_feature_flag():
     cfg = AnomalyConfig({"x": RuleProfile(100, SEVERITY_CRITICAL, CATEGORY_BUSINESS)})
     assert not AnomalyDetectionService(config=cfg, flags=DummyFlags()).evaluate("x").should_block
