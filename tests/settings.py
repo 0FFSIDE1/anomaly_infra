@@ -10,7 +10,7 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "feature_flag_infra.django.apps.FeatureFlagInfraConfig",
     "anomaly_infra.django.apps.AnomalyInfraConfig",
-]
+]   
 
 CACHES = {
     "default": {

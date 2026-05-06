@@ -1,2 +1,11 @@
 include README.md
+include LICENSE
+
 recursive-include anomaly_infra/django/migrations *.py
+
+prune tests
+exclude pytest.ini
+exclude .env
+exclude .gitignore
+exclude Makefile
+exclude requirements.txt

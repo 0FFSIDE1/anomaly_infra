@@ -18,12 +18,9 @@ from .defaults import DEFAULT_RULE_PROFILE
 from .interfaces import AlertDispatcher, AnomalyEventStore
 from .sanitizer import mask_sensitive
 from .types import AnomalyDecision
+from feature_flag_infra.django.providers import DjangoDBFlagProvider
 
 logger = logging.getLogger(__name__)
-
-
-class FeatureFlagProvider(Protocol):
-    def enabled(self, flag: str, *, user: Any = None, default: bool = False) -> bool: ...
 
 
 class StaticFeatureFlags:
@@ -32,7 +29,7 @@ class StaticFeatureFlags:
     def __init__(self, flags: dict[str, bool] | None = None):
         self.flags = flags or {}
 
-    def enabled(self, flag: str, *, user: Any = None, default: bool = False) -> bool:
+    def is_enabled(self, flag: str, *, user: Any = None, default: bool = False) -> bool:
         return bool(self.flags.get(flag, default))
 
 
@@ -42,7 +39,7 @@ class AnomalyDetectionService:
     def __init__(
         self,
         *,
-        flags: FeatureFlagProvider | None = None,
+        flags: DjangoDBFlagProvider | None = None,
         event_store: AnomalyEventStore | None = None,
         alert_dispatcher: AlertDispatcher | None = None,
         config: AnomalyConfig | None = None,
@@ -57,7 +54,7 @@ class AnomalyDetectionService:
 
     def flag_enabled(self, flag_name: str, *, user: Any = None, default: bool = False) -> bool:
         try:
-            return bool(self.flags.enabled(flag_name, user=user, default=default))
+            return bool(self.flags.is_enabled(flag_name, user=user, default=default))
         except Exception:
             logger.exception("anomaly_feature_flag_check_failed", extra={"flag": flag_name})
             return bool(default)
