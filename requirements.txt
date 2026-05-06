@@ -1,5 +1,6 @@
-feature_flag_infra
-pytest-django
-celery
-redis
 django
+feature-flag-infra
+pytest
+pytest-django
+pytest-mock
+coverage

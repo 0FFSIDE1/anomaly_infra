@@ -1,3 +1,10 @@
+"""Helpers for recursively removing sensitive values from payloads."""
+
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from .constants import MASKED_VALUE
+
 SENSITIVE_KEYS = {
     "password",
     "token",
@@ -9,29 +16,35 @@ SENSITIVE_KEYS = {
     "card",
     "cvv",
     "pin",
+    "cookie",
+    "session",
+    "csrf",
+    "set-cookie",
 }
 
 
-def _mask(value):
-    if value is None:
-        return value
-
-    text = str(value)
-
-    if len(text) <= 6:
-        return "***"
-
-    return f"{text[:2]}***{text[-2:]}"
+def is_sensitive_key(key: Any) -> bool:
+    """Return True when a key name likely contains a secret."""
+    normalized = str(key).lower().replace("-", "_")
+    return any(fragment.replace("-", "_") in normalized for fragment in SENSITIVE_KEYS)
 
 
-def mask_sensitive(data):
-    if isinstance(data, dict):
+def mask_sensitive(data: Any) -> Any:
+    """Return a deep sanitized copy of ``data`` without mutating the input."""
+    if isinstance(data, Mapping):
         return {
-            key: _mask(value) if key.lower() in SENSITIVE_KEYS else mask_sensitive(value)
+            key: MASKED_VALUE if is_sensitive_key(key) else mask_sensitive(value)
             for key, value in data.items()
         }
 
+    if isinstance(data, tuple):
+        return tuple(mask_sensitive(item) for item in data)
+
     if isinstance(data, list):
+        return [mask_sensitive(item) for item in data]
+
+    # Avoid treating strings/bytes as generic Sequences.
+    if isinstance(data, Sequence) and not isinstance(data, (str, bytes, bytearray)):
         return [mask_sensitive(item) for item in data]
 
     return data
