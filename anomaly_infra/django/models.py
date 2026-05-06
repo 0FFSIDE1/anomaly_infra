@@ -55,6 +55,7 @@ class AnomalyEvent(models.Model):
         self.save(update_fields=["resolved", "resolved_at", "notes", "updated_at"])
 
     class Meta:
+        app_label = "anomaly_infra"
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["category", "severity"], name="anomaly_inf_categor_c7599b_idx"),

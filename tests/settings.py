@@ -35,3 +35,8 @@ MIDDLEWARE = [
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 USE_TZ = True
+
+DEFAULT_HOST = "testserver"
+ALLOWED_HOSTS = [DEFAULT_HOST]
+ROOT_URLCONF = "tests.urls"
+ROOT_HOSTCONF = "tests.hosts"
