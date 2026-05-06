@@ -11,7 +11,7 @@ class AnomalyEvent(models.Model):
     anomaly_type = models.CharField(max_length=120, db_index=True)
     category = models.CharField(max_length=40, db_index=True)
     severity = models.CharField(max_length=20, db_index=True)
-    risk_score = models.PositiveIntegerField(default=0, db_index=True)
+    risk_score = models.PositiveSmallIntegerField(default=0, db_index=True)
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -24,7 +24,7 @@ class AnomalyEvent(models.Model):
     tenant_id = models.CharField(max_length=120, null=True, blank=True, db_index=True)
     tenant_name = models.CharField(max_length=255, null=True, blank=True)
 
-    path = models.CharField(max_length=255, null=True, blank=True)
+    path = models.CharField(max_length=2048, null=True, blank=True)
     method = models.CharField(max_length=12, null=True, blank=True)
     resource_type = models.CharField(max_length=100, null=True, blank=True)
     resource_id = models.CharField(max_length=120, null=True, blank=True)
@@ -51,17 +51,18 @@ class AnomalyEvent(models.Model):
     def mark_resolved(self, notes: str = ""):
         self.resolved = True
         self.resolved_at = timezone.now()
-        self.notes = notes
+        self.notes = notes or ""
         self.save(update_fields=["resolved", "resolved_at", "notes", "updated_at"])
 
     class Meta:
         ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=["category", "severity"]),
-            models.Index(fields=["tenant_id", "created_at"]),
-            models.Index(fields=["anomaly_type", "created_at"]),
-            models.Index(fields=["resolved", "created_at"]),
+            models.Index(fields=["category", "severity"], name="anomaly_inf_categor_c7599b_idx"),
+            models.Index(fields=["tenant_id", "created_at"], name="anomaly_inf_tenant__5c3910_idx"),
+            models.Index(fields=["anomaly_type", "created_at"], name="anomaly_inf_anomaly_491587_idx"),
+            models.Index(fields=["resolved", "created_at"], name="anomaly_inf_resolve_6629b2_idx"),
+            models.Index(fields=["action_taken", "created_at"], name="anomaly_inf_action__550bac_idx"),
         ]
 
     def __str__(self):
-        return f"{self.anomaly_type} - {self.severity}"
+        return f"AnomalyEvent<{self.anomaly_type}:{self.severity}>"

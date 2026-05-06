@@ -1,50 +1,58 @@
 from urllib.parse import urlparse
 
+from django.conf import settings
+
 from anomaly_infra.sanitizer import mask_sensitive
+
+
+def _meta(request):
+    return getattr(request, "META", {}) or {}
 
 
 def get_ip(request):
     if not request:
         return None
 
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    meta = _meta(request)
+    trust_forwarded = bool(getattr(settings, "ANOMALY_TRUST_X_FORWARDED_FOR", False))
+    if trust_forwarded:
+        forwarded = meta.get("HTTP_X_FORWARDED_FOR", "")
+        if isinstance(forwarded, str) and forwarded.strip():
+            return forwarded.split(",", 1)[0].strip() or None
 
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-
-    return request.META.get("REMOTE_ADDR")
+    remote_addr = meta.get("REMOTE_ADDR")
+    return str(remote_addr).strip() if remote_addr else None
 
 
 def get_user_agent(request):
     if not request:
         return None
-
-    return request.META.get("HTTP_USER_AGENT")
+    agent = _meta(request).get("HTTP_USER_AGENT")
+    return str(agent) if agent is not None else None
 
 
 def request_meta(request):
     if not request:
-        return {
-            "device_id": None,
-            "request_id": None,
-            "request": {},
-        }
+        return {"device_id": None, "request_id": None, "request": {}}
 
-    absolute_uri = ""
-
-    if hasattr(request, "build_absolute_uri"):
-        absolute_uri = request.build_absolute_uri()
-
-    parsed = urlparse(absolute_uri)
+    meta = _meta(request)
+    path = getattr(request, "path", None)
+    try:
+        absolute_uri = request.build_absolute_uri() if hasattr(request, "build_absolute_uri") else ""
+        parsed = urlparse(absolute_uri)
+        if parsed.path:
+            path = parsed.path
+    except Exception:
+        pass
 
     return {
-        "device_id": request.META.get("HTTP_X_DEVICE_ID"),
-        "request_id": request.META.get("HTTP_X_REQUEST_ID"),
+        "device_id": meta.get("HTTP_X_DEVICE_ID"),
+        "request_id": meta.get("HTTP_X_REQUEST_ID"),
         "request": {
-            "resource": parsed.path or getattr(request, "path", None),
+            "resource": path,
             "resource_id": getattr(request, "anomaly_resource_id", None),
-            "request_id": request.META.get("HTTP_X_REQUEST_ID"),
-            "device_id": request.META.get("HTTP_X_DEVICE_ID"),
+            "request_id": meta.get("HTTP_X_REQUEST_ID"),
+            "device_id": meta.get("HTTP_X_DEVICE_ID"),
             "method": getattr(request, "method", None),
         },
     }
@@ -63,6 +71,7 @@ def build_event_payload(
     blocked=False,
 ):
     meta = request_meta(request)
+    safe_user = user if getattr(user, "is_authenticated", False) else None
 
     tenant_id = getattr(tenant, "id", None) or getattr(request, "tenant_id", None)
     tenant_name = getattr(tenant, "name", None) or getattr(request, "tenant_name", None)
@@ -72,9 +81,9 @@ def build_event_payload(
         "category": decision.category,
         "severity": decision.severity,
         "risk_score": decision.risk_score,
-        "user": user if getattr(user, "is_authenticated", False) else None,
-        "tenant_id": str(tenant_id) if tenant_id else None,
-        "tenant_name": tenant_name,
+        "user": safe_user,
+        "tenant_id": str(tenant_id) if tenant_id is not None else None,
+        "tenant_name": str(tenant_name) if tenant_name is not None else None,
         "path": getattr(request, "path", None),
         "method": getattr(request, "method", None),
         "resource_type": resource_type,
@@ -84,11 +93,8 @@ def build_event_payload(
         "device_id": meta["device_id"],
         "request_id": meta["request_id"],
         "status_code": status_code,
-        "metadata": {
-            **decision.metadata,
-            "request": meta["request"],
-        },
+        "metadata": mask_sensitive({**(decision.metadata or {}), "request": meta["request"]}),
         "masked_payload": mask_sensitive(payload or {}),
         "action_taken": decision.action_taken,
-        "blocked": blocked,
+        "blocked": bool(blocked or decision.should_block),
     }

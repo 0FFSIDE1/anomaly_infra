@@ -1,0 +1,2 @@
+include README.md
+recursive-include anomaly_infra/django/migrations *.py
