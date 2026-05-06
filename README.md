@@ -153,3 +153,14 @@ Required profile fields:
 * `action_taken`, `blocked`, `resolved`, `resolved_at`, `notes`
 
 Indexes are included for common triage queries: `category + severity`, `tenant_id + created_at`, `anomaly_type + created_at`, `resolved + created_at`, and `action_taken + created_at`.
+
+### Transaction rollback behavior
+
+`DjangoAnomalyEventStore` records through a separate autocommit database connection whenever it is called inside a `transaction.atomic()` block. This keeps anomaly audit rows available even if the surrounding business transaction rolls back.
+
+Optional Django settings:
+
+* `ANOMALY_PERSIST_EVENTS_OUTSIDE_TRANSACTIONS` (default: `True`) disables or enables the separate-connection behavior.
+* `ANOMALY_EVENT_DATABASE_ALIAS` can point anomaly writes at an explicit database alias. If omitted, the store clones the active database alias into an autocommit alias that uses the same database configuration.
+
+In-memory SQLite databases cannot share schema and rows with a cloned connection, so the store safely falls back to the current connection in that environment. Use a file-backed SQLite database, PostgreSQL, MySQL, or an explicit `ANOMALY_EVENT_DATABASE_ALIAS` when you need rollback-resistant anomaly records.

@@ -168,3 +168,22 @@ def test_service_helper_import_does_not_cause_app_registry_not_ready():
     from anomaly_infra.django import service
 
     assert hasattr(service, "get_anomaly_service")
+
+
+@pytest.mark.django_db(transaction=True, databases=["anomaly_primary", "anomaly_events"])
+def test_django_event_store_persists_inside_rolled_back_transaction():
+    from django.db import transaction
+
+    from anomaly_infra.django.providers import DjangoAnomalyEventStore
+
+    store = DjangoAnomalyEventStore(
+        database="anomaly_primary",
+        independent_database_alias="anomaly_events",
+    )
+
+    with pytest.raises(RuntimeError):
+        with transaction.atomic(using="anomaly_primary"):
+            store.save({"anomaly_type": "x", "category": "request", "severity": "low", "risk_score": 1})
+            raise RuntimeError("roll back business transaction")
+
+    assert AnomalyEvent.objects.using("anomaly_primary").filter(anomaly_type="x").count() == 1
