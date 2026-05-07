@@ -16,7 +16,7 @@ from .constants import (
 )
 from .defaults import DEFAULT_RULE_PROFILE
 from .interfaces import AlertDispatcher, AnomalyEventStore
-from .sanitizer import mask_sensitive
+from .sanitizer import json_safe, mask_sensitive
 from .types import AnomalyDecision
 
 logger = logging.getLogger(__name__)
@@ -119,9 +119,9 @@ class AnomalyDetectionService:
         if "raw_payload" in sanitized_payload:
             sanitized_payload.pop("raw_payload", None)
         if "metadata" in sanitized_payload:
-            sanitized_payload["metadata"] = mask_sensitive(sanitized_payload["metadata"] or {})
+            sanitized_payload["metadata"] = json_safe(mask_sensitive(sanitized_payload["metadata"] or {}))
         if "masked_payload" in sanitized_payload:
-            sanitized_payload["masked_payload"] = mask_sensitive(sanitized_payload["masked_payload"] or {})
+            sanitized_payload["masked_payload"] = json_safe(mask_sensitive(sanitized_payload["masked_payload"] or {}))
 
         event = self.event_store.save(sanitized_payload)
 
