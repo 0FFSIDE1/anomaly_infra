@@ -18,7 +18,11 @@ class DjangoAnomalyEventStore(AnomalyEventStore):
 
     By default, events are written through an autocommit connection when the
     caller is inside a transaction.atomic() block. This keeps anomaly audit
-    records available even if the business transaction later rolls back.
+    records available even if the business transaction later rolls back when
+    the configured database can be opened through an independent connection.
+    In-memory SQLite databases cannot provide that independent connection, so
+    those writes intentionally fall back to the active transaction and roll
+    back with it.
     """
 
     def __init__(
