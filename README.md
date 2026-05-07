@@ -26,7 +26,7 @@ Most applications need a consistent way to detect and record suspicious behavior
 - Django middleware for generic request/response anomaly patterns.
 - A framework-agnostic service that can be used in any Python codebase.
 
-The package does **not** provide domain-specific enforcement for invoices, accounts, inventory, RBAC, or tenants. Those checks should live in the consuming application and call `anomaly_infra` when suspicious behavior is observed.
+The package does **not** provide domain-specific enforcement. Those checks should live in the consuming application and call `anomaly_infra` when suspicious behavior is observed.
 
 ## Key features
 
