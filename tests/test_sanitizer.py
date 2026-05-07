@@ -1,6 +1,8 @@
+import json
 from copy import deepcopy
+from uuid import UUID
 
-from anomaly_infra.sanitizer import mask_sensitive
+from anomaly_infra.sanitizer import json_safe, mask_sensitive
 
 
 def test_masks_sensitive_keys_and_substrings_case_insensitive():
@@ -28,3 +30,19 @@ def test_masks_nested_dicts_and_lists_without_mutating_original():
     assert masked["items"][0]["sessionid"] == "***"
     assert masked["items"][1]["safe"] == "ok"
     assert payload == original
+
+
+def test_json_safe_reduces_model_like_objects_to_json_values():
+    class UserLike:
+        pk = UUID("12345678-1234-5678-1234-567812345678")
+
+    payload = {"actor": UserLike(), "items": (UserLike(),), "safe": "ok"}
+
+    converted = json_safe(payload)
+
+    assert converted == {
+        "actor": "12345678-1234-5678-1234-567812345678",
+        "items": ["12345678-1234-5678-1234-567812345678"],
+        "safe": "ok",
+    }
+    json.dumps(converted)

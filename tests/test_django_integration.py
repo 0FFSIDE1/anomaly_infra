@@ -1,6 +1,8 @@
+import json
 from types import SimpleNamespace
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.http import HttpResponse
 from django.test import RequestFactory, override_settings
 
@@ -62,6 +64,27 @@ def test_build_event_payload_masks_payload_and_omits_raw_secrets(rf):
     assert payload["masked_payload"]["password"] == "***"
     assert payload["masked_payload"]["nested"]["api_key"] == "***"
     assert "secret" not in repr(payload)
+
+
+@pytest.mark.django_db
+def test_build_event_payload_uses_json_safe_user_id_and_metadata(rf):
+    user = get_user_model().objects.create_user(username="sam")
+    request = rf.get("/api/v1/things/123")
+    request.user = user
+
+    payload = build_event_payload(
+        decision(),
+        request=request,
+        user=user,
+        payload={"actor": user},
+    )
+
+    assert payload["user_id"] == user.pk
+    assert "user" not in payload
+    assert payload["masked_payload"]["actor"] == user.pk
+    json.dumps(payload)
+    event = AnomalyEvent.objects.create(**payload)
+    assert event.user == user
 
 
 def test_get_ip_uses_remote_addr_by_default(rf):

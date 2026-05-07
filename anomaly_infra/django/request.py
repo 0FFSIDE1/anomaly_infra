@@ -2,7 +2,7 @@ from urllib.parse import urlparse
 
 from django.conf import settings
 
-from anomaly_infra.sanitizer import mask_sensitive
+from anomaly_infra.sanitizer import json_safe, mask_sensitive
 
 
 def _meta(request):
@@ -72,6 +72,10 @@ def build_event_payload(
 ):
     meta = request_meta(request)
     safe_user = user if getattr(user, "is_authenticated", False) else None
+    safe_user_id = getattr(safe_user, "pk", None)
+    if safe_user_id is None:
+        safe_user_id = getattr(safe_user, "id", None)
+    safe_user_id = json_safe(safe_user_id)
 
     tenant_id = getattr(tenant, "id", None) or getattr(request, "tenant_id", None)
     tenant_name = getattr(tenant, "name", None) or getattr(request, "tenant_name", None)
@@ -81,7 +85,7 @@ def build_event_payload(
         "category": decision.category,
         "severity": decision.severity,
         "risk_score": decision.risk_score,
-        "user": safe_user,
+        "user_id": safe_user_id,
         "tenant_id": str(tenant_id) if tenant_id is not None else None,
         "tenant_name": str(tenant_name) if tenant_name is not None else None,
         "path": getattr(request, "path", None),
@@ -93,8 +97,8 @@ def build_event_payload(
         "device_id": meta["device_id"],
         "request_id": meta["request_id"],
         "status_code": status_code,
-        "metadata": mask_sensitive({**(decision.metadata or {}), "request": meta["request"]}),
-        "masked_payload": mask_sensitive(payload or {}),
+        "metadata": json_safe(mask_sensitive({**(decision.metadata or {}), "request": meta["request"]})),
+        "masked_payload": json_safe(mask_sensitive(payload or {})),
         "action_taken": decision.action_taken,
         "blocked": bool(blocked or decision.should_block),
     }
