@@ -396,6 +396,10 @@ The default Django service uses `DjangoAnomalyEventStore`, which creates `Anomal
 
 By default, `DjangoAnomalyEventStore` attempts to persist events outside an active business transaction by using an autocommit clone of the configured database connection. This behavior is controlled by settings documented below.
 
+When this independent connection is available, anomaly rows survive a later rollback in your business transaction, which is useful for patterns that record an anomaly and then raise `ValidationError`. This is the expected production behavior for PostgreSQL, MySQL, and file-backed SQLite databases.
+
+In-memory SQLite databases (`NAME=":memory:"` or SQLite URI memory databases) are an exception: Django cannot open a second independent connection to the same in-memory database safely, so the store logs `anomaly_independent_transaction_unsupported` and writes through the active transaction. If that transaction rolls back, the anomaly row rolls back too. For tests that need to assert durable anomaly persistence, use a file-backed test database or configure `ANOMALY_EVENT_DATABASE_ALIAS` to point at a separate file-backed/mirrored test database instead of `:memory:`.
+
 ## Django settings reference
 
 Only the following Django settings are read by the current codebase.
