@@ -428,8 +428,8 @@ Only the following Django settings are read by the current codebase.
 1. runs `mask_sensitive()` over the anomaly payload;
 2. builds an `alert_infra.Alert` with title `Anomaly detected: <anomaly_type>`;
 3. includes only compact safe metadata such as event id, anomaly type, severity, risk score, user id, tenant, request id, correlation id, action, resource, and sanitized context;
-4. prefers `alert_infra.django.send_alert(alert)` when Django settings are configured, so the consuming project's `ALERT_INFRA` settings control email, Slack, Telegram, and Celery behavior;
-5. otherwise dispatches through an injected or default `alert_infra.AlertDispatcher`; and
+4. prefers the documented `alert_infra.django.send_alert(**kwargs)` helper when Django settings are configured, so the consuming project's `ALERT_INFRA` settings control email, Slack, Telegram, and Celery behavior;
+5. otherwise constructs `alert_infra.Alert(**kwargs)` and dispatches through an injected or default `alert_infra.AlertDispatcher.send(alert)`; and
 6. falls back to `LoggingAlertDispatcher` when `alert_infra` is unavailable, disabled, or delivery fails with fail-silent behavior enabled.
 
 The adapter does not implement Slack, Telegram, email, webhook, or Celery delivery itself. Those transports and async behavior belong to `alert_infra`.
@@ -447,7 +447,11 @@ If the anomaly payload already contains an alert-infra severity (`info`, `warnin
 
 ### Django settings example
 
-Install and configure `alert_infra` in the consuming project, then enable the anomaly adapter in Django settings:
+Install and configure the published `alert-infra` package in the consuming project, then enable the anomaly adapter in Django settings:
+
+```bash
+pip install "alert-infra[django]"
+```
 
 ```python
 INSTALLED_APPS = [
@@ -462,10 +466,25 @@ ANOMALY_INFRA = {
 }
 
 ALERT_INFRA = {
-    "TRANSPORTS": {
-        "email": {"ENABLED": True, "TO": ["security@example.com"]},
-        "slack": {"ENABLED": True, "WEBHOOK_URL": "https://hooks.slack.com/..."},
-        "telegram": {"ENABLED": True, "BOT_TOKEN": "...", "CHAT_ID": "..."},
+    "ENABLED": True,
+    "REDACT_SENSITIVE_DATA": True,
+    "EMAIL": {
+        "ENABLED": True,
+        "BACKEND": "auto",
+        "FROM_EMAIL": "alerts@example.com",
+        "TO_EMAILS": ["security@example.com"],
+        "RESEND_API_KEY": "",
+        "SENDGRID_API_KEY": "",
+        "SMTP_HOST": "smtp.example.com",
+    },
+    "SLACK": {
+        "ENABLED": True,
+        "WEBHOOK_URL": "https://hooks.slack.com/services/...",
+    },
+    "TELEGRAM": {
+        "ENABLED": True,
+        "BOT_TOKEN": "...",
+        "CHAT_ID": "...",
     },
 }
 ```
@@ -492,19 +511,30 @@ ANOMALY_INFRA = {
 }
 
 ALERT_INFRA = {
-    "ASYNC_ENABLED": True,
-    "CELERY_TASK_NAME": "alert_infra.tasks.send_alert",
-    "TRANSPORTS": {
-        "slack": {"ENABLED": True, "WEBHOOK_URL": "https://hooks.slack.com/..."},
+    "ENABLED": True,
+    "ASYNC": {
+        "ENABLED": True,
+        "BACKEND": "celery",
+        "TASK_NAME": "alert_infra.dispatch_alert",
+        "QUEUE": "alerts",
+        "FAIL_SILENTLY": True,
     },
+    "SLACK": {
+        "ENABLED": True,
+        "WEBHOOK_URL": "https://hooks.slack.com/services/...",
+    },
+}
+
+CELERY_TASK_ROUTES = {
+    "alert_infra.dispatch_alert": {"queue": "alerts"},
 }
 ```
 
-`anomaly_infra` passes one sanitized `Alert` to `alert_infra`; it does not duplicate Celery enqueueing.
+`anomaly_infra` passes one sanitized alert request to `alert_infra.django.send_alert(**kwargs)`; it does not duplicate Celery enqueueing. When `ALERT_INFRA["ASYNC"]["ENABLED"]` is true, `alert_infra` returns a `DeliveryResult` such as `sent=("celery",)`.
 
 ### Plain Python usage
 
-For non-Django applications, inject an `alert_infra.AlertDispatcher`-compatible object. The injected object can expose either `dispatch(alert)` or `send(alert)`:
+For non-Django applications, inject an `alert_infra.AlertDispatcher`-compatible object. The adapter constructs `alert_infra.Alert(**kwargs)` and calls `send(alert)`:
 
 ```python
 from anomaly_infra.alerts import AlertInfraAnomalyDispatcher
