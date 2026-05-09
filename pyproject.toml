@@ -17,6 +17,7 @@ dynamic = ["version"]
 dependencies = [
     "django>=4.2",
     "feature-flag-infra",
+    "alert_infra"
 ]
 
 [tool.setuptools.packages.find]
