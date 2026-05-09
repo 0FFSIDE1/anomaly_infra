@@ -16,7 +16,8 @@ dynamic = ["version"]
 
 dependencies = [
     "django>=4.2",
-    "feature-flag-infra>=0.1.0",
+    "feature-flag-infra",
+    "alert_infra"
 ]
 
 [tool.setuptools.packages.find]
@@ -35,13 +36,16 @@ version_scheme = "no-guess-dev"
 local_scheme = "no-local-version"
 
 [project.optional-dependencies]
+alert = ["alert-infra"]
 celery = ["celery>=5"]
 redis = ["redis>=4"]
 dev = [
     "pytest",
     "pytest-django",
     "pytest-mock",
-    "coverage"
+    "coverage",
+    "alert_infra"
+
 ]
 
 [tool.pytest.ini_options]

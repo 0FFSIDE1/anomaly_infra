@@ -142,7 +142,7 @@ Supported categories are:
 
 Alerting is controlled by `ANOMALY_ALERTING_ENABLED`. A decision only has `should_alert=True` when its risk score is at least `50` and the alerting flag is enabled.
 
-In Django, the default `LoggingAlertDispatcher` writes a compact sanitized warning log containing only the event id, anomaly type, severity, and risk score.
+In Django, the default alert dispatcher is `AlertInfraAnomalyDispatcher`. It converts anomaly events into optional `alert_infra.Alert` objects and delegates delivery to `alert_infra` when that package is installed and configured. If `alert_infra` is disabled, missing, or misconfigured, `LoggingAlertDispatcher` remains the safe fallback and writes a compact sanitized warning log containing only the event id, anomaly type, severity, and risk score.
 
 ### Blocking
 
@@ -396,6 +396,10 @@ The default Django service uses `DjangoAnomalyEventStore`, which creates `Anomal
 
 By default, `DjangoAnomalyEventStore` attempts to persist events outside an active business transaction by using an autocommit clone of the configured database connection. This behavior is controlled by settings documented below.
 
+When this independent connection is available, anomaly rows survive a later rollback in your business transaction, which is useful for patterns that record an anomaly and then raise `ValidationError`. This is the expected production behavior for PostgreSQL, MySQL, and file-backed SQLite databases.
+
+In-memory SQLite databases (`NAME=":memory:"` or SQLite URI memory databases) are an exception: Django cannot open a second independent connection to the same in-memory database safely, so the store logs `anomaly_independent_transaction_unsupported` and writes through the active transaction. If that transaction rolls back, the anomaly row rolls back too. For tests that need to assert durable anomaly persistence, use a file-backed test database or configure `ANOMALY_EVENT_DATABASE_ALIAS` to point at a separate file-backed/mirrored test database instead of `:memory:`.
+
 ## Django settings reference
 
 Only the following Django settings are read by the current codebase.
@@ -415,6 +419,151 @@ Only the following Django settings are read by the current codebase.
 | `ANOMALY_TRUST_X_FORWARDED_FOR` | `False` | Request helpers | When `True`, `get_ip()` uses the first value in `X-Forwarded-For`; otherwise it uses `REMOTE_ADDR`. |
 | `ANOMALY_PERSIST_EVENTS_OUTSIDE_TRANSACTIONS` | `True` | Django event store | When enabled, event persistence inside `transaction.atomic()` uses an independent autocommit database alias where possible. |
 | `ANOMALY_EVENT_DATABASE_ALIAS` | `None` | Django event store | Optional explicit database alias for transaction-independent anomaly event writes. |
+| `ANOMALY_INFRA` | `{}` | Django service factory and alert adapter | Optional nested configuration for alert dispatching. Supports `ALERT_DISPATCHER`, `ALERT_INFRA_ENABLED`, and `ALERT_FAIL_SILENTLY`. |
+
+## Alert delivery with `alert_infra`
+
+`anomaly_infra.alerts.AlertInfraAnomalyDispatcher` is a small adapter between the existing anomaly dispatcher interface and the reusable `alert_infra` package. The anomaly service still calls `dispatch(event_id: str, payload: dict | None = None)`. The adapter then:
+
+1. runs `mask_sensitive()` over the anomaly payload;
+2. builds an `alert_infra.Alert` with title `Anomaly detected: <anomaly_type>`;
+3. includes only compact safe metadata such as event id, anomaly type, severity, risk score, user id, tenant, request id, correlation id, action, resource, and sanitized context;
+4. prefers the documented `alert_infra.django.send_alert(**kwargs)` helper when Django settings are configured, so the consuming project's `ALERT_INFRA` settings control email, Slack, Telegram, and Celery behavior;
+5. otherwise constructs `alert_infra.Alert(**kwargs)` and dispatches through an injected or default `alert_infra.AlertDispatcher.send(alert)`; and
+6. falls back to `LoggingAlertDispatcher` when `alert_infra` is unavailable, disabled, or delivery fails with fail-silent behavior enabled.
+
+The adapter does not implement Slack, Telegram, email, webhook, or Celery delivery itself. Those transports and async behavior belong to `alert_infra`.
+
+### Severity mapping
+
+If the anomaly payload already contains an alert-infra severity (`info`, `warning`, `error`, or `critical`), it is preserved. Anomaly severities are normalized as `low -> info`, `medium -> warning`, `high -> error`, and `critical -> critical`. If no valid severity is supplied, risk score is mapped as follows:
+
+| Risk score | Alert severity |
+| --- | --- |
+| `>= 90` | `critical` |
+| `>= 70` | `error` |
+| `>= 40` | `warning` |
+| `< 40` | `info` |
+
+### Django settings example
+
+Install and configure the published `alert-infra` package in the consuming project, then enable the anomaly adapter in Django settings:
+
+```bash
+pip install "alert-infra[django]"
+```
+
+```python
+INSTALLED_APPS = [
+    # ...
+    "anomaly_infra.django.apps.AnomalyInfraConfig",
+]
+
+ANOMALY_INFRA = {
+    "ALERT_DISPATCHER": "alert_infra",
+    "ALERT_INFRA_ENABLED": True,
+    "ALERT_FAIL_SILENTLY": True,
+}
+
+ALERT_INFRA = {
+    "ENABLED": True,
+    "REDACT_SENSITIVE_DATA": True,
+    "EMAIL": {
+        "ENABLED": True,
+        "BACKEND": "auto",
+        "FROM_EMAIL": "alerts@example.com",
+        "TO_EMAILS": ["security@example.com"],
+        "RESEND_API_KEY": "",
+        "SENDGRID_API_KEY": "",
+        "SMTP_HOST": "smtp.example.com",
+    },
+    "SLACK": {
+        "ENABLED": True,
+        "WEBHOOK_URL": "https://hooks.slack.com/services/...",
+    },
+    "TELEGRAM": {
+        "ENABLED": True,
+        "BOT_TOKEN": "...",
+        "CHAT_ID": "...",
+    },
+}
+```
+
+With this configuration, `get_anomaly_service()` uses `AlertInfraAnomalyDispatcher`. The dispatcher prefers `alert_infra.django.send_alert()`, so the consuming project's `ALERT_INFRA` configuration remains the source of truth for email, Slack, Telegram, and delivery policy.
+
+To force the original logging-only behavior:
+
+```python
+ANOMALY_INFRA = {
+    "ALERT_DISPATCHER": "logging",
+}
+```
+
+### Celery async alerting
+
+Do not add anomaly-specific Celery tasks for alert delivery. Enable async delivery in `alert_infra` and let `alert_infra.django.send_alert()` enqueue or deliver according to that package's settings. A typical consuming-project configuration looks like:
+
+```python
+ANOMALY_INFRA = {
+    "ALERT_DISPATCHER": "alert_infra",
+    "ALERT_INFRA_ENABLED": True,
+    "ALERT_FAIL_SILENTLY": True,
+}
+
+ALERT_INFRA = {
+    "ENABLED": True,
+    "ASYNC": {
+        "ENABLED": True,
+        "BACKEND": "celery",
+        "TASK_NAME": "alert_infra.dispatch_alert",
+        "QUEUE": "alerts",
+        "FAIL_SILENTLY": True,
+    },
+    "SLACK": {
+        "ENABLED": True,
+        "WEBHOOK_URL": "https://hooks.slack.com/services/...",
+    },
+}
+
+CELERY_TASK_ROUTES = {
+    "alert_infra.dispatch_alert": {"queue": "alerts"},
+}
+```
+
+`anomaly_infra` passes one sanitized alert request to `alert_infra.django.send_alert(**kwargs)`; it does not duplicate Celery enqueueing. When `ALERT_INFRA["ASYNC"]["ENABLED"]` is true, `alert_infra` returns a `DeliveryResult` such as `sent=("celery",)`.
+
+### Plain Python usage
+
+For non-Django applications, inject an `alert_infra.AlertDispatcher`-compatible object. The adapter constructs `alert_infra.Alert(**kwargs)` and calls `send(alert)`:
+
+```python
+from anomaly_infra.alerts import AlertInfraAnomalyDispatcher
+
+dispatcher = AlertInfraAnomalyDispatcher(
+    dispatcher=my_alert_infra_dispatcher,
+    prefer_django=False,
+)
+
+dispatcher.dispatch(
+    event_id="event-123",
+    payload={
+        "anomaly_type": "invoice_total_mismatch",
+        "severity": "warning",
+        "risk_score": 75,
+        "user_id": 42,
+        "tenant": "acme",
+        "authorization": "Bearer secret",
+    },
+)
+```
+
+The `authorization` value is masked before alert construction and is not included in alert metadata or compact delivery logs.
+
+### Security and fallback behavior
+
+The adapter deliberately uses two layers of redaction: `anomaly_infra.sanitizer.mask_sensitive()` before alert construction, and `alert_infra` metadata redaction during delivery. Metadata is allow-listed and excludes raw request bodies, raw payloads, cookies, authorization headers, API keys, session identifiers, CSRF tokens, and secrets. Delivery logs include only event id, anomaly type, severity, risk score, delivery status, and failed transport names.
+
+If `alert_infra` is missing or disabled, anomaly alerts are still represented by the compact sanitized `LoggingAlertDispatcher` warning log. If delivery raises and `ALERT_FAIL_SILENTLY=True`, the adapter logs a compact failure event and then uses the logging fallback. If `ALERT_FAIL_SILENTLY=False`, the delivery exception is raised to the caller.
 
 ## Rule profile configuration
 
@@ -748,6 +897,7 @@ Current test coverage areas include:
 - Decision thresholds for alerting, blocking, and step-up review.
 - Feature flag behavior and safe fallbacks.
 - Payload and metadata sanitization.
+- Alert-infra adapter mapping, severity normalization, safe metadata allow-listing, fallback logging, Django `send_alert()` delegation, fail-silent behavior, and plain Python dispatcher injection.
 - Django app configuration and migrations.
 - Django model persistence and `mark_resolved()` behavior.
 - Request IP extraction and `X-Forwarded-For` trust behavior.
@@ -766,6 +916,7 @@ make build
 ```text
 anomaly_infra/
   __init__.py
+  alerts.py                  # Logging fallback and alert_infra adapter
   config.py                  # AnomalyConfig and rule profile validation
   constants.py               # Feature flag names, categories, severities, thresholds
   defaults.py                # Bundled default rule profiles
@@ -798,6 +949,10 @@ tests/
 
 Core APIs:
 
+- `anomaly_infra.alerts.AlertInfraAnomalyDispatcher`
+- `anomaly_infra.alerts.LoggingAlertDispatcher`
+- `anomaly_infra.alerts.build_alert_fields`
+- `anomaly_infra.alerts.map_alert_severity`
 - `anomaly_infra.config.AnomalyConfig`
 - `anomaly_infra.service.AnomalyDetectionService`
 - `anomaly_infra.service.StaticFeatureFlags`
@@ -826,8 +981,6 @@ Django APIs:
 The following items are not implemented in the current codebase but are natural future extensions:
 
 - First-class documentation examples for specific `feature-flag-infra` admin workflows.
-- Pluggable alert dispatchers for email, Slack, webhooks, or task queues.
-- Optional Celery task helpers for asynchronous alert delivery.
 - Optional Redis-specific counter backend guidance and operational tuning.
 - Management commands for anomaly event cleanup, export, or reporting.
 - Admin UI helpers for reviewing and resolving anomaly events.
