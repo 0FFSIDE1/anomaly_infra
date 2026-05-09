@@ -51,6 +51,10 @@ UNSAFE_CONTEXT_KEYS = frozenset(
 )
 
 
+class AlertInfraDeliveryFailed(RuntimeError):
+    """Raised when alert_infra reports delivery failure and fail-silent mode is off."""
+
+
 class LoggingAlertDispatcher(AlertDispatcher):
     """Compact sanitized logging fallback for anomaly alerts."""
 
@@ -70,9 +74,10 @@ class LoggingAlertDispatcher(AlertDispatcher):
 class AlertInfraAnomalyDispatcher(AlertDispatcher):
     """Adapt anomaly-infra alert events to the optional alert_infra package.
 
-    The adapter keeps alert_infra optional, performs anomaly-infra redaction before
-    constructing alerts, and delegates async behavior to alert_infra's Django or
-    dispatcher configuration instead of creating anomaly-specific Celery tasks.
+    The adapter keeps alert-infra optional, performs anomaly-infra redaction
+    before constructing alerts, uses alert_infra's documented ``send`` and
+    Django ``send_alert(**kwargs)`` APIs, and delegates async behavior to
+    alert_infra instead of creating anomaly-specific Celery tasks.
     """
 
     def __init__(
@@ -99,41 +104,29 @@ class AlertInfraAnomalyDispatcher(AlertDispatcher):
             return self.fallback.dispatch(event_id, safe_payload)
 
         try:
-            alert = self._build_alert(alert_fields)
-            if self.dispatcher is not None:
-                result = self._dispatch_with_injected_dispatcher(alert)
-                self._log_delivery(alert_fields, result=result)
-                return result
-
             send_alert = self._get_django_send_alert()
             if send_alert is not None:
-                result = send_alert(alert)
-                self._log_delivery(alert_fields, result=result)
-                return result
+                result = send_alert(**alert_fields)
+            else:
+                alert = self._build_alert(alert_fields)
+                dispatcher = self.dispatcher or self._build_default_alert_infra_dispatcher()
+                result = self._call_dispatcher(dispatcher, alert)
 
-            dispatcher = self._build_default_alert_infra_dispatcher()
-            result = self._call_dispatcher(dispatcher, alert)
             self._log_delivery(alert_fields, result=result)
+            if _delivery_failed(result):
+                self._handle_delivery_failure_result(alert_fields, result, event_id, safe_payload)
             return result
         except ModuleNotFoundError as exc:
             if exc.name and exc.name.startswith("alert_infra"):
                 self._log_delivery(alert_fields, status="missing")
                 return self.fallback.dispatch(event_id, safe_payload)
             raise
+        except AlertInfraDeliveryFailed:
+            raise
         except Exception as exc:
             self._log_delivery(alert_fields, status="failed")
             if self._fail_silently():
-                logger.warning(
-                    "anomaly_alert_infra_delivery_failed",
-                    extra={
-                        "event_id": alert_fields["metadata"].get("event_id"),
-                        "anomaly_type": alert_fields["metadata"].get("anomaly_type"),
-                        "severity": alert_fields.get("severity"),
-                        "risk_score": alert_fields["metadata"].get("risk_score"),
-                        "delivery_status": "fallback",
-                        "failed_transports": _failed_transport_names(exc),
-                    },
-                )
+                self._log_delivery_failure(alert_fields, failed_transports=_failed_transport_names(exc))
                 return self.fallback.dispatch(event_id, safe_payload)
             raise
 
@@ -168,16 +161,30 @@ class AlertInfraAnomalyDispatcher(AlertDispatcher):
         dispatcher_class = getattr(alert_module, "AlertDispatcher")
         return dispatcher_class()
 
-    def _dispatch_with_injected_dispatcher(self, alert: Any):
-        return self._call_dispatcher(self.dispatcher, alert)
-
     @staticmethod
     def _call_dispatcher(dispatcher: Any, alert: Any):
-        if hasattr(dispatcher, "dispatch"):
-            return dispatcher.dispatch(alert)
         if hasattr(dispatcher, "send"):
             return dispatcher.send(alert)
-        raise TypeError("alert_infra dispatcher must provide dispatch(alert) or send(alert)")
+        if hasattr(dispatcher, "dispatch"):
+            return dispatcher.dispatch(alert)
+        raise TypeError("alert_infra dispatcher must provide send(alert)")
+
+    def _handle_delivery_failure_result(
+        self,
+        alert_fields: dict[str, Any],
+        result: Any,
+        event_id: str,
+        safe_payload: dict,
+    ) -> None:
+        failed_transports = _failed_transport_names(result)
+        self._log_delivery_failure(alert_fields, failed_transports=failed_transports)
+        if self._fail_silently():
+            self.fallback.dispatch(event_id, safe_payload)
+            return
+        raise AlertInfraDeliveryFailed(
+            "alert_infra delivery failed for transports: "
+            + ", ".join(failed_transports or ["unknown"])
+        )
 
     @staticmethod
     def _log_delivery(
@@ -196,9 +203,24 @@ class AlertInfraAnomalyDispatcher(AlertDispatcher):
             },
         )
 
+    @staticmethod
+    def _log_delivery_failure(alert_fields: dict[str, Any], *, failed_transports: list[str]) -> None:
+        metadata = alert_fields["metadata"]
+        logger.warning(
+            "anomaly_alert_infra_delivery_failed",
+            extra={
+                "event_id": metadata.get("event_id"),
+                "anomaly_type": metadata.get("anomaly_type"),
+                "severity": alert_fields.get("severity"),
+                "risk_score": metadata.get("risk_score"),
+                "delivery_status": "fallback",
+                "failed_transports": failed_transports,
+            },
+        )
+
 
 def build_alert_fields(event_id: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Build sanitized alert_infra.Alert kwargs from an anomaly payload."""
+    """Build alert_infra ``Alert``/``send_alert`` kwargs from an anomaly payload."""
 
     safe_payload = mask_sensitive(dict(payload or {}))
     anomaly_type = str(safe_payload.get("anomaly_type") or "unknown")
@@ -216,14 +238,19 @@ def build_alert_fields(event_id: str, payload: Mapping[str, Any] | None = None) 
     else:
         message = f"{message}."
 
-    return {
+    alert_fields: dict[str, Any] = {
         "title": f"Anomaly detected: {anomaly_type}",
         "message": message,
         "severity": severity,
         "source": "anomaly_infra",
-        "tags": tags,
+        "tags": tuple(tags),
         "metadata": metadata,
     }
+    if metadata.get("request_id"):
+        alert_fields["request_id"] = str(metadata["request_id"])
+    if metadata.get("correlation_id"):
+        alert_fields["correlation_id"] = str(metadata["correlation_id"])
+    return alert_fields
 
 
 def build_alert_metadata(event_id: str, safe_payload: Mapping[str, Any], severity: str) -> dict[str, Any]:
@@ -298,6 +325,9 @@ def _django_settings_configured() -> bool:
 def _delivery_status(result: Any) -> str:
     if result is None:
         return "unknown"
+    ok = getattr(result, "ok", None)
+    if ok is not None:
+        return "success" if ok else "failed"
     status = getattr(result, "status", None)
     if status is not None:
         return str(status)
@@ -307,8 +337,27 @@ def _delivery_status(result: Any) -> str:
     return "sent"
 
 
+def _delivery_failed(result: Any) -> bool:
+    if result is None:
+        return False
+    ok = getattr(result, "ok", None)
+    if ok is not None:
+        return not bool(ok)
+    failed = getattr(result, "failed", None)
+    if failed is not None:
+        return bool(failed)
+    success = getattr(result, "success", None)
+    if success is not None:
+        return not bool(success)
+    return False
+
+
 def _failed_transport_names(result: Any) -> list[str]:
-    names = getattr(result, "failed_transports", None)
+    names = getattr(result, "failed", None)
+    if isinstance(names, Mapping):
+        names = names.keys()
+    if names is None:
+        names = getattr(result, "failed_transports", None)
     if names is None:
         names = getattr(result, "failed_transport_names", None)
     if names is None:

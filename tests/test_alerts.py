@@ -7,6 +7,7 @@ import pytest
 
 from anomaly_infra.alerts import (
     AlertInfraAnomalyDispatcher,
+    AlertInfraDeliveryFailed,
     LoggingAlertDispatcher,
     build_alert_fields,
     map_alert_severity,
@@ -17,23 +18,29 @@ from anomaly_infra.alerts import (
 class FakeAlert:
     title: str
     message: str
-    severity: str
-    source: str
-    tags: list[str]
-    metadata: dict
+    severity: str = "error"
+    source: str | None = None
+    tags: tuple[str, ...] = ()
+    metadata: dict | None = None
+    correlation_id: str | None = None
+    request_id: str | None = None
 
 
 class FakeDeliveryResult:
-    def __init__(self, *, success=True, failed_transports=None):
-        self.success = success
-        self.failed_transports = failed_transports or []
+    def __init__(self, *, sent=("recording",), failed=None):
+        self.sent = sent
+        self.failed = failed or {}
+
+    @property
+    def ok(self):
+        return not self.failed
 
 
 class RecordingAlertDispatcher:
     def __init__(self):
         self.alerts = []
 
-    def dispatch(self, alert):
+    def send(self, alert):
         self.alerts.append(alert)
         return FakeDeliveryResult()
 
@@ -95,7 +102,7 @@ def test_alert_infra_dispatcher_builds_alert_and_plain_python_injection_masks_se
     assert alert.title == "Anomaly detected: invoice_total_mismatch"
     assert alert.severity == "warning"
     assert alert.source == "anomaly_infra"
-    assert alert.tags == ["anomaly", "invoice_total_mismatch", "tenant-a"]
+    assert alert.tags == ("anomaly", "invoice_total_mismatch", "tenant-a")
     assert alert.metadata["event_id"] == "event-2"
     assert alert.metadata["user_id"] == 123
     assert "authorization" not in alert.metadata
@@ -137,7 +144,7 @@ def test_missing_alert_infra_falls_back_to_logging(monkeypatch, caplog):
 
 def test_delivery_failure_does_not_crash_when_fail_silently_enabled(fake_alert_infra, caplog):
     class FailingDispatcher:
-        def dispatch(self, alert):
+        def send(self, alert):
             raise RuntimeError("slack failed")
 
     caplog.set_level(logging.WARNING)
@@ -154,7 +161,7 @@ def test_delivery_failure_does_not_crash_when_fail_silently_enabled(fake_alert_i
 
 def test_delivery_failure_raises_when_fail_silently_disabled(fake_alert_infra):
     class FailingDispatcher:
-        def dispatch(self, alert):
+        def send(self, alert):
             raise RuntimeError("delivery failed")
 
     dispatcher = AlertInfraAnomalyDispatcher(
@@ -168,14 +175,20 @@ def test_delivery_failure_raises_when_fail_silently_disabled(fake_alert_infra):
 def test_django_send_alert_path_is_used_when_available(monkeypatch, fake_alert_infra, settings):
     sent = []
     django_module = types.ModuleType("alert_infra.django")
-    django_module.send_alert = lambda alert: sent.append(alert) or FakeDeliveryResult()
+
+    def send_alert(**kwargs):
+        sent.append(kwargs)
+        return FakeDeliveryResult(sent=("noop",))
+
+    django_module.send_alert = send_alert
     monkeypatch.setitem(sys.modules, "alert_infra.django", django_module)
 
     dispatcher = AlertInfraAnomalyDispatcher()
     dispatcher.dispatch("event-6", {"anomaly_type": "x", "risk_score": 91})
 
     assert sent
-    assert sent[-1].title == "Anomaly detected: x"
+    assert sent[-1]["title"] == "Anomaly detected: x"
+    assert sent[-1]["metadata"]["event_id"] == "event-6"
 
 
 def test_build_alert_fields_excludes_raw_payloads_and_sensitive_values():
@@ -209,9 +222,40 @@ def test_build_alert_fields_excludes_raw_payloads_and_sensitive_values():
 def test_alert_infra_async_delivery_is_delegated_to_send_alert(monkeypatch, fake_alert_infra, settings):
     calls = []
     django_module = types.ModuleType("alert_infra.django")
-    django_module.send_alert = lambda alert: calls.append(alert) or FakeDeliveryResult()
+    django_module.send_alert = lambda **kwargs: calls.append(kwargs) or FakeDeliveryResult(sent=("celery",))
     monkeypatch.setitem(sys.modules, "alert_infra.django", django_module)
 
     AlertInfraAnomalyDispatcher().dispatch("event-8", {"anomaly_type": "async", "risk_score": 70})
 
     assert len(calls) == 1
+
+
+def test_failed_delivery_result_falls_back_when_fail_silently_enabled(fake_alert_infra, caplog):
+    class PartiallyFailingDispatcher:
+        def send(self, alert):
+            return FakeDeliveryResult(sent=("email.smtp",), failed={"slack": "AlertDeliveryError"})
+
+    caplog.set_level(logging.WARNING)
+    dispatcher = AlertInfraAnomalyDispatcher(
+        dispatcher=PartiallyFailingDispatcher(), fail_silently=True, prefer_django=False
+    )
+
+    result = dispatcher.dispatch("event-9", {"anomaly_type": "x", "risk_score": 91, "api_key": "secret"})
+
+    assert result.failed == {"slack": "AlertDeliveryError"}
+    assert "anomaly_alert_infra_delivery_failed" in caplog.text
+    assert "anomaly_alert_dispatched" in caplog.text
+    assert "secret" not in caplog.text
+
+
+def test_failed_delivery_result_raises_when_fail_silently_disabled(fake_alert_infra):
+    class FailingResultDispatcher:
+        def send(self, alert):
+            return FakeDeliveryResult(sent=(), failed={"telegram": "AlertDeliveryError"})
+
+    dispatcher = AlertInfraAnomalyDispatcher(
+        dispatcher=FailingResultDispatcher(), fail_silently=False, prefer_django=False
+    )
+
+    with pytest.raises(AlertInfraDeliveryFailed, match="telegram"):
+        dispatcher.dispatch("event-10", {"anomaly_type": "x", "risk_score": 91})
