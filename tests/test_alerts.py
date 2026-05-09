@@ -139,7 +139,7 @@ def test_missing_alert_infra_falls_back_to_logging(monkeypatch, caplog):
     dispatcher = AlertInfraAnomalyDispatcher(prefer_django=False)
     dispatcher.dispatch("event-3", {"anomaly_type": "x", "risk_score": 91, "authorization": "Bearer secret"})
 
-    assert "anomaly_alert_dispatched" in caplog.text
+    assert "anomaly_alert_infra_dispatched" in caplog.text
     assert "Bearer secret" not in caplog.text
 
 

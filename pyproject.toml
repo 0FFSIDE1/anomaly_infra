@@ -43,7 +43,9 @@ dev = [
     "pytest",
     "pytest-django",
     "pytest-mock",
-    "coverage"
+    "coverage",
+    "alert_infra"
+
 ]
 
 [tool.pytest.ini_options]
