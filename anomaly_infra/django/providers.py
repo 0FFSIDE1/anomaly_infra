@@ -6,8 +6,8 @@ from copy import deepcopy
 from django.conf import settings
 from django.db import DEFAULT_DB_ALIAS, connections
 
-from anomaly_infra.interfaces import AlertDispatcher, AnomalyEventStore
-from anomaly_infra.sanitizer import mask_sensitive
+from anomaly_infra.alerts import LoggingAlertDispatcher
+from anomaly_infra.interfaces import AnomalyEventStore
 
 logger = logging.getLogger(__name__)
 
@@ -86,18 +86,3 @@ class DjangoAnomalyEventStore(AnomalyEventStore):
             return False
         name = str(database_config.get("NAME", ""))
         return name == ":memory:" or "mode=memory" in name
-
-
-class LoggingAlertDispatcher(AlertDispatcher):
-    def dispatch(self, event_id: str, payload: dict | None = None):
-        safe_payload = mask_sensitive(payload or {})
-        # Keep the log compact and sanitized; never emit raw request bodies.
-        logger.warning(
-            "anomaly_alert_dispatched",
-            extra={
-                "event_id": event_id,
-                "anomaly_type": safe_payload.get("anomaly_type"),
-                "severity": safe_payload.get("severity"),
-                "risk_score": safe_payload.get("risk_score"),
-            },
-        )

@@ -35,6 +35,7 @@ version_scheme = "no-guess-dev"
 local_scheme = "no-local-version"
 
 [project.optional-dependencies]
+alert = ["alert-infra"]
 celery = ["celery>=5"]
 redis = ["redis>=4"]
 dev = [
