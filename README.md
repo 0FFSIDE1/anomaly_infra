@@ -250,6 +250,10 @@ At minimum, create and enable the global detection flag in your feature flag sys
 ANOMALY_DETECTION_ENABLED=True
 ```
 
+```bash
+python manage.py register_feature ANOMALY_DETECTION_ENABLED --enable # Use the command to enable features
+```
+
 Then enable alerting and blocking only when you are ready:
 
 ```text
@@ -421,9 +425,9 @@ Only the following Django settings are read by the current codebase.
 | `ANOMALY_EVENT_DATABASE_ALIAS` | `None` | Django event store | Optional explicit database alias for transaction-independent anomaly event writes. |
 | `ANOMALY_INFRA` | `{}` | Django service factory and alert adapter | Optional nested configuration for alert dispatching. Supports `ALERT_DISPATCHER`, `ALERT_INFRA_ENABLED`, and `ALERT_FAIL_SILENTLY`. |
 
-## Alert delivery with `alert_infra`
+## Alert delivery with [`alert_infra`](https://pypi.org/project/alert-infra/)
 
-`anomaly_infra.alerts.AlertInfraAnomalyDispatcher` is a small adapter between the existing anomaly dispatcher interface and the reusable `alert_infra` package. The anomaly service still calls `dispatch(event_id: str, payload: dict | None = None)`. The adapter then:
+`anomaly_infra.alerts.AlertInfraAnomalyDispatcher` is a small adapter between the existing anomaly dispatcher interface and the reusable [`alert_infra`](https://pypi.org/project/alert-infra/) package. The anomaly service still calls `dispatch(event_id: str, payload: dict | None = None)`. The adapter then:
 
 1. runs `mask_sensitive()` over the anomaly payload;
 2. builds an `alert_infra.Alert` with title `Anomaly detected: <anomaly_type>`;
